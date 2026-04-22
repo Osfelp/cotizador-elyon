@@ -26,8 +26,8 @@ except ImportError:
     AUTOMATIZACION_ACTIVA = False
 
 # --- CONFIGURACIÓN DE CARPETA MAESTRA DE DRIVE ---
-# Pon aquí el ID de la carpeta de Drive donde quieres que se guarden TODAS las cotizaciones
-ID_CARPETA_DRIVE = "TU_ID_AQUI"
+# Reemplaza esto con el ID real de tu carpeta de Google Drive
+ID_CARPETA_DRIVE = "TU_ID_DE_CARPETA_AQUI"
 
 # --- CONFIGURACIÓN DE COLORES Y RUTAS ---
 COLOR_VERDE = "#008f39"   
@@ -83,36 +83,46 @@ def redondear_al_mil(valor):
         v = float(valor); return 0 if v <= 0 else int(math.ceil(v / 1000.0) * 1000)
     except: return 0
 
-# --- AUTOMATIZACIÓN PROTEGIDA ---
-def enviar_correo_automatico(destinatario, nombre_cliente, pdf_bytes, xlsx_bytes, filename):
-    if not AUTOMATIZACION_ACTIVA or "gmail" not in st.secrets: return False 
+# --- AUTOMATIZACIÓN DE CORREO CON 3 ADJUNTOS ---
+def enviar_correo_completo(destinatario, nombre_cliente, pdf_bytes, xlsx_cot_bytes, xlsx_ctrl_bytes, filename):
+    if not AUTOMATIZACION_ACTIVA or "gmail" not in st.secrets: 
+        return False, "Faltan credenciales en Secrets."
     try:
         msg = MIMEMultipart()
         msg['From'] = st.secrets["gmail"]["user"]
         msg['To'] = destinatario
-        msg['Subject'] = f"Nueva Cotización: {nombre_cliente} - {filename}"
+        # El nombre del asunto es el nombre de la cotización
+        msg['Subject'] = f"Cotización: {filename}"
         
-        msg.attach(MIMEText(f"Se ha generado la cotización {filename} para el cliente {nombre_cliente}.\nAdjunto PDF y Cuadro de Control.", 'plain'))
+        cuerpo = f"Se ha generado la documentación completa para la cotización {filename}.\nCliente: {nombre_cliente}.\n\nSe adjuntan los 3 archivos solicitados."
+        msg.attach(MIMEText(cuerpo, 'plain'))
         
-        part_pdf = MIMEBase('application', 'octet-stream')
-        part_pdf.set_payload(pdf_bytes)
-        encoders.encode_base64(part_pdf)
-        part_pdf.add_header('Content-Disposition', f"attachment; filename={filename}.pdf")
-        msg.attach(part_pdf)
+        # 1. Adjuntar PDF
+        p1 = MIMEBase('application', 'octet-stream')
+        p1.set_payload(pdf_bytes); encoders.encode_base64(p1)
+        p1.add_header('Content-Disposition', f"attachment; filename={filename}.pdf")
+        msg.attach(p1)
 
-        part_xl = MIMEBase('application', 'octet-stream')
-        part_xl.set_payload(xlsx_bytes)
-        encoders.encode_base64(part_xl)
-        part_xl.add_header('Content-Disposition', f"attachment; filename={filename}_Control.xlsx")
-        msg.attach(part_xl)
+        # 2. Adjuntar Excel Comercial
+        p2 = MIMEBase('application', 'octet-stream')
+        p2.set_payload(xlsx_cot_bytes); encoders.encode_base64(p2)
+        p2.add_header('Content-Disposition', f"attachment; filename={filename}_Comercial.xlsx")
+        msg.attach(p2)
+
+        # 3. Adjuntar Excel de Control
+        p3 = MIMEBase('application', 'octet-stream')
+        p3.set_payload(xlsx_ctrl_bytes); encoders.encode_base64(p3)
+        p3.add_header('Content-Disposition', f"attachment; filename={filename}_ControlInterno.xlsx")
+        msg.attach(p3)
 
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(st.secrets["gmail"]["user"], st.secrets["gmail"]["password"])
         server.send_message(msg)
         server.quit()
-        return True
-    except: return False
+        return True, "Enviado con éxito"
+    except Exception as e:
+        return False, str(e)
 
 def subir_a_drive(archivo_bytes, nombre_archivo, folder_id, tipo_mimo):
     if not AUTOMATIZACION_ACTIVA or "google_drive" not in st.secrets: return False
@@ -131,9 +141,7 @@ class PDF(FPDF):
         super().__init__(*args, **kwargs)
         self.set_auto_page_break(auto=True, margin=15)
     def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.set_text_color(128, 128, 128)
+        self.set_y(-15); self.set_font('Arial', 'I', 8); self.set_text_color(128, 128, 128)
 
 # --- ENCABEZADO ---
 col_l, col_t = st.columns([1, 2.5])
@@ -144,8 +152,7 @@ with col_t:
     st.markdown("<h1 style='margin-top: 10px; font-size: 3em;'>Formato de cotización</h1>", unsafe_allow_html=True)
     st.write("Plataforma de Gestión Comercial | **ELYON PRODUCCIONES**")
     
-    # Campo abierto para escribir el correo del asesor
-    asesor_email = st.text_input("📧 CORREO DE QUIEN COTIZA", placeholder="ejemplo@correo.com", key="val_asesor_email")
+    asesor_email = st.text_input("📧 CORREO DE QUIEN COTIZA (Para recibir copia)", placeholder="tu-correo@gmail.com", key="val_asesor_email")
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -175,7 +182,7 @@ evento_fecha = c13.date_input("FECHA EVENTO", date.today(), key="val_fev")
 evento_lugar = c14.text_input("LUGAR EVENTO", key="val_lug")
 evento_asistentes = c15.text_input("No. ASISTENTES", key="val_asi")
 
-# --- II. GESTIÓN POR CATEGORÍAS (Motor Blindado) ---
+# --- II. GESTIÓN POR CATEGORÍAS ---
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown("### II. DETALLE DEL SERVICIO")
 
@@ -220,7 +227,7 @@ for i, cat_name in enumerate(list(st.session_state.cat_order)):
     edit_key = f"edit_mode_{cat_name}"
     
     if st.session_state.get(edit_key, False):
-        with col_tit: st.text_input("Renombrar (Enter para guardar):", value=cat_name, key=f"edit_input_{cat_name}", on_change=guardar_edicion, args=(cat_name, i), label_visibility="collapsed")
+        with col_tit: st.text_input("Renombrar sección:", value=cat_name, key=f"edit_input_{cat_name}", on_change=guardar_edicion, args=(cat_name, i), label_visibility="collapsed")
     else:
         with col_tit: st.markdown(f"#### 📁 {cat_name.upper()}")
             
@@ -282,7 +289,7 @@ if not df_validos.empty:
             sub_cat_mostrar = redondear_al_mil(subset['Subtotal Item'].sum())
             st.markdown(f"<div style='text-align: right; color: {COLOR_VERDE}; font-weight: bold;'>Subtotal {cat_name}: {formato_moneda(sub_cat_mostrar)}</div>", unsafe_allow_html=True)
 else:
-    st.info("Agrega descripciones en las tablas de arriba para ver la previsualización.")
+    st.info("Agrega registros para ver la previsualización.")
 
 res1, res2, res3, res4 = st.columns(4)
 res1.metric("SUBTOTAL NETO", formato_moneda(subtotal_neto))
@@ -469,7 +476,7 @@ def generar_pdf():
 
     pdf.ln(3); pdf.cell(150, 10, "TOTAL GENERAL", 1, 0, 'R', fill=True); pdf.cell(40, 10, formato_moneda(total_general), 1, 1, 'R', fill=True)
 
-    pdf.ln(10); 
+    pdf.ln(10)
     if pdf.get_y() + 30 > 260: pdf.add_page()
     pdf.set_text_color(100, 100, 100); pdf.set_font("Arial", 'B', 6); pdf.cell(0, 4, "TÉRMINOS Y CONDICIONES GENERALES DEL SERVICIO", ln=True); pdf.set_font("Arial", '', 6)
     texto_terminos = (
@@ -498,20 +505,27 @@ if not listo_para_descargar: st.info("⚠️ Agrega al menos un ítem a la tabla
 col_b1, col_b2, col_b3 = st.columns(3)
 empresa_nombre = solicitante_empresa if solicitante_empresa else "Cliente"
 
+# Generación de archivos (Solo si hay datos para evitar errores)
 pdf_data = generar_pdf() if listo_para_descargar else b""
 xlsx_cot = generar_excel_estilizado(df_validos, False) if listo_para_descargar else b""
 xlsx_ctrl = generar_excel_estilizado(df_validos, True) if listo_para_descargar else b""
 
-if col_b1.download_button("📥 COT PDF", pdf_data, f"Cot_{cotizacion_num}_{empresa_nombre}.pdf", "application/pdf", disabled=not listo_para_descargar, use_container_width=True):
-    if AUTOMATIZACION_ACTIVA and ("gmail" in st.secrets or "google_drive" in st.secrets):
-        if asesor_email.strip() != "":
-            enviar_correo_automatico(asesor_email.strip(), solicitante_empresa, pdf_data, xlsx_ctrl, f"Cot_{cotizacion_num}_{empresa_nombre}")
-            subir_a_drive(pdf_data, f"Cot_{cotizacion_num}_{empresa_nombre}.pdf", ID_CARPETA_DRIVE, "application/pdf")
-            st.toast(f"✅ Copia enviada y respaldada en la nube para {asesor_email}")
-        else:
-            st.warning("⚠️ No ingresaste el correo de quien cotiza. Se descargó el PDF pero no se envió copia automática.")
+filename_base = f"Cot_{cotizacion_num}_{empresa_nombre}"
 
-col_b2.download_button("📊 COT EXCEL", xlsx_cot, f"Cot_{cotizacion_num}_{empresa_nombre}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", disabled=not listo_para_descargar, use_container_width=True)
+# Lógica del botón con automatización mejorada
+if col_b1.download_button("📥 COT PDF", pdf_data, f"{filename_base}.pdf", "application/pdf", disabled=not listo_para_descargar, use_container_width=True):
+    if AUTOMATIZACION_ACTIVA and "gmail" in st.secrets:
+        if asesor_email.strip() != "":
+            with st.spinner("Enviando copia por correo..."):
+                # Enviamos el correo con LOS 3 archivos en uno solo
+                exito, msg = enviar_correo_completo(asesor_email.strip(), solicitante_empresa, pdf_data, xlsx_cot, xlsx_ctrl, filename_base)
+                if exito:
+                    subir_a_drive(pdf_data, f"{filename_base}.pdf", ID_CARPETA_DRIVE, "application/pdf")
+                    st.toast(f"✅ Documentación enviada a {asesor_email}")
+                else:
+                    st.error(f"❌ Error al enviar correo: {msg}")
+
+col_b2.download_button("📊 COT EXCEL", xlsx_cot, f"{filename_base}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", disabled=not listo_para_descargar, use_container_width=True)
 col_b3.download_button("📈 CUADRO CONTROL", xlsx_ctrl, f"Control_{cotizacion_num}_{empresa_nombre}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", disabled=not listo_para_descargar, use_container_width=True)
 
 st.markdown("<div style='text-align: center; font-size: 10px; color: #444746; padding-top: 60px;'>by Oscar Buitrago / Elyon Producciones.</div>", unsafe_allow_html=True)
